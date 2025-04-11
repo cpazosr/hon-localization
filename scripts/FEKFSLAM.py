@@ -33,6 +33,7 @@ class FEKFSLAM:
         self.Vm = np.eye(self.Hm.shape[0])
         # Features
         self.features_timeout = 2*(1.0/1)   # freq = ...
+        self.yaw = None
 
         # Subscribers
         self.imu_sub = rospy.Subscriber("/turtlebot/kobuki/sensors/imu_data", Imu, self.imu_callback)    # Imu - 10 Hz
@@ -51,15 +52,49 @@ class FEKFSLAM:
         # Applying queue to not miss a message but still check the message is recent 
         # Applying old message updates is dangerous as the filter needs closest/realest values for update corrections
         q = msg.orientation
-        roll, pitch ,yaw = euler_from_quaternion([q.x, q.y, q.z, q.w])
-        cov = msg.orientation_covariance
+        roll, pitch ,self.yaw = euler_from_quaternion([q.x, q.y, q.z, q.w])
+        """cov  = msg.orientation_covariance
         # self.yaw_Rm = cov[-1]    # from 3x3 mat (roll,pitch,yaw) -> element at [2,2]
-        self.imu_queue.put((yaw,rospy.Time.now()))    # compass orientation [euler], time
+        self.imu_queue.put((yaw,rospy.Time.now()))    # compass orientation [euler], time 
+        print ( "imu callback:", yaw)"""
 
     def odom_callback(self, msg):
         # Obtain the odometry published by the differential drive robot
         # Because we are integrating we need to use every message, so a queue is ideal
-        self.odom_queue.put(msg)
+        try:
+            # Prediction
+            odom_msg = msg
+            x = odom_msg.pose.pose.position.x
+            y = odom_msg.pose.pose.position.y
+            q = odom_msg.pose.pose.orientation
+            _,_,theta = euler_from_quaternion([q.x,q.y,q.z,q.w])
+            xk_bar = np.array([[x],[y],[theta]])
+            cov = np.array(odom_msg.pose.covariance).reshape(6, 6)
+            Pk_bar = np.array([
+                [cov[0, 0], cov[0, 1], cov[0, 5]],  # x
+                [cov[1, 0], cov[1, 1], cov[1, 5]],  # y
+                [cov[5, 0], cov[5, 1], cov[5, 5]]   # yaw
+            ])
+            # print("Prediction")
+            
+            # Upon new IMU data only
+            try:
+                #zk, imu_msg_time = self.imu_queue.get_nowait()
+                if (rospy.Time.now() - imu_msg_time).to_sec() < self.imu_timeout:
+                    # Update with IMU
+                    # print("IMU received")
+                    xk, Pk = self.Update(zk, self.yaw_Rm, xk_bar, Pk_bar, self.Hm, self.Vm)
+            except queue.Empty:     # no IMU message
+                xk = xk_bar
+                Pk = Pk_bar
+        
+            # Publish
+            self.publishOdometry(xk, Pk)
+            
+        except queue.Empty: # no odom message
+            print("empty odom")
+            pass
+            
 
     def h(self, xk_bar):
         # Actual state yaw of the robot
@@ -108,39 +143,6 @@ class FEKFSLAM:
         # Main node execution
         rate = rospy.Rate(50)   # 50 Hz
         while not rospy.is_shutdown():
-            try:
-                # Prediction
-                odom_msg = self.odom_queue.get_nowait()
-                x = odom_msg.pose.pose.position.x
-                y = odom_msg.pose.pose.position.y
-                q = odom_msg.pose.pose.orientation
-                _,_,theta = euler_from_quaternion([q.x,q.y,q.z,q.w])
-                xk_bar = np.array([[x],[y],[theta]])
-                cov = np.array(odom_msg.pose.covariance).reshape(6, 6)
-                Pk_bar = np.array([
-                    [cov[0, 0], cov[0, 1], cov[0, 5]],  # x
-                    [cov[1, 0], cov[1, 1], cov[1, 5]],  # y
-                    [cov[5, 0], cov[5, 1], cov[5, 5]]   # yaw
-                ])
-                # print("Prediction")
-                
-                # Upon new IMU data only
-                try:
-                    zk, imu_msg_time = self.imu_queue.get_nowait()
-                    if (rospy.Time.now() - imu_msg_time).to_sec() < self.imu_timeout:
-                        # Update with IMU
-                        # print("IMU received")
-                        xk, Pk = self.Update(zk, self.yaw_Rm, xk_bar, Pk_bar, self.Hm, self.Vm)
-                except queue.Empty:     # no IMU message
-                    xk = xk_bar
-                    Pk = Pk_bar
-                
-                # Publish
-                self.publishOdometry(xk, Pk)
-            
-            except queue.Empty: # no odom message
-                print("empty odom")
-                pass
             
             rate.sleep()
 
