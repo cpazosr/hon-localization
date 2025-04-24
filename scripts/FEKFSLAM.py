@@ -9,6 +9,8 @@ from sensor_msgs.msg import JointState, Imu
 from geometry_msgs.msg import Quaternion
 from tf.transformations import euler_from_quaternion, quaternion_from_euler
 
+
+
 class FEKFSLAM:
     
     def __init__(self):
@@ -53,10 +55,10 @@ class FEKFSLAM:
         # Applying old message updates is dangerous as the filter needs closest/realest values for update corrections
         q = msg.orientation
         roll, pitch ,self.yaw = euler_from_quaternion([q.x, q.y, q.z, q.w])
-        """cov  = msg.orientation_covariance
+        cov  = msg.orientation_covariance
         # self.yaw_Rm = cov[-1]    # from 3x3 mat (roll,pitch,yaw) -> element at [2,2]
-        self.imu_queue.put((yaw,rospy.Time.now()))    # compass orientation [euler], time 
-        print ( "imu callback:", yaw)"""
+        self.imu_queue.put((self.yaw,rospy.Time.now()))    # compass orientation [euler], time 
+        print( "imu callback:", self.yaw)
 
     def odom_callback(self, msg):
         # Obtain the odometry published by the differential drive robot
@@ -68,6 +70,7 @@ class FEKFSLAM:
             y = odom_msg.pose.pose.position.y
             q = odom_msg.pose.pose.orientation
             _,_,theta = euler_from_quaternion([q.x,q.y,q.z,q.w])
+            print("odom callback:", theta)
             xk_bar = np.array([[x],[y],[theta]])
             cov = np.array(odom_msg.pose.covariance).reshape(6, 6)
             Pk_bar = np.array([
@@ -79,11 +82,12 @@ class FEKFSLAM:
             
             # Upon new IMU data only
             try:
-                #zk, imu_msg_time = self.imu_queue.get_nowait()
+                zk, imu_msg_time = self.imu_queue.get_nowait()
                 if (rospy.Time.now() - imu_msg_time).to_sec() < self.imu_timeout:
                     # Update with IMU
                     # print("IMU received")
                     xk, Pk = self.Update(zk, self.yaw_Rm, xk_bar, Pk_bar, self.Hm, self.Vm)
+                    
             except queue.Empty:     # no IMU message
                 xk = xk_bar
                 Pk = Pk_bar

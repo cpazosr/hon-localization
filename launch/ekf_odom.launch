@@ -1,0 +1,12 @@
+<launch>
+    <!-- Configurable arguments -->
+    <arg name="robot_name" default="turtlebot"/>
+
+    <!-- Run Simple Odometry -->
+        <node name="diff_drive_odom" pkg="localization" type="diff_drive_CLEAN.py" output="screen">
+            <rosparam command="load" file="$(find turtlebot_simulation)/config/turtlebot_odom.yaml" />
+            <remap from="joint_states" to="/$(arg robot_name)/joint_states"/>
+            <remap from="odom" to="/$(arg robot_name)/kobuki/odom"/>
+        </node>
+
+</launch>   
