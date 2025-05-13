@@ -1,0 +1,7 @@
+<launch>
+    <node name="FEKFSLAM" pkg="localization" type="FEKFSLAM.py" output="screen">
+        <rosparam command="load" file="$(find turtlebot_simulation)/config/turtlebot_odom.yaml" />
+        <remap from="joint_states" to="/turtlebot/joint_states"/>
+        <remap from="odom" to="/turtlebot/kobuki/odom"/>
+    </node>
+</launch>
