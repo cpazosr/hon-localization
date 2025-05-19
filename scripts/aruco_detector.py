@@ -28,7 +28,10 @@ aruco img: turtlebot_simulation/resources/textures
 class Aruco_detector:
     def __init__(self):
         self.bridge = CvBridge()
+        # Simulation sub:
         self.image_sub = rospy.Subscriber("/turtlebot/kobuki/realsense/color/image_color", Image, self.img_callback) # input
+        # Physical robot sub:
+        # self.image_sub = rospy.Subscriber("/turtlebot/kobuki/realsense/color/image_raw", Image, self.img_callback) # input
         self.img_aruco_pub = rospy.Publisher("/turtlebot/kobuki/sensors/aruco/image", Image, queue_size=10)     # feedback processing
         self.markers_pub = rospy.Publisher("/turtlebot/kobuki/sensors/aruco/markers", MarkerArray, queue_size=10)  # aruco poses w.r.t. robot
         self.aruco_dict = aruco.Dictionary_get(aruco.DICT_ARUCO_ORIGINAL)
@@ -46,6 +49,7 @@ class Aruco_detector:
 
     def img_callback(self, data):
         try:
+            # rospy.loginfo("img_callback")
             cv_image = self.bridge.imgmsg_to_cv2(data, "bgr8")
             # rospy.loginfo("Received image")
         except CvBridgeError as e:

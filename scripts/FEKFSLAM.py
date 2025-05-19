@@ -4,7 +4,8 @@ import numpy as np
 import rospy
 import scipy
 from visualization_msgs.msg import MarkerArray
-from geometry_msgs.msg import PoseArray, Pose
+from geometry_msgs.msg import PoseWithCovariance
+from localization.msg import ArucoWithCovariance, ArucoWithCovarianceArray
 from nav_msgs.msg import Odometry 
 from sensor_msgs.msg import JointState, Imu
 from tf.broadcaster import TransformBroadcaster
@@ -80,10 +81,11 @@ class DifferentialDrive:
         self.imu_sub = rospy.Subscriber("/turtlebot/kobuki/sensors/imu_data", Imu, self.imu_callback)
         self.aruco_sub = rospy.Subscriber("/turtlebot/kobuki/sensors/aruco/markers", MarkerArray, self.markers_callback)
         # Odom publisher
-        self.state_pub = rospy.Publisher("/kobuki/SLAM/EKF_odom", Odometry, queue_size=20)
+        self.state_pub = rospy.Publisher("/turtlebot/kobuki/SLAM/EKF_odom", Odometry, queue_size=20)
         self.odom_pub = rospy.Publisher("odom", Odometry, queue_size=20)    # /turtlebot/kobuki/odom
-        self.markers_pub = rospy.Publisher("/kobuki/SLAM/markers", PoseArray,queue_size=1)
+        self.markers_pub = rospy.Publisher("/turtlebot/kobuki/SLAM/markers", ArucoWithCovarianceArray, queue_size=1)
         self.tf_br = TransformBroadcaster()
+        self.pose_publishers = {}
         rospy.Timer(rospy.Duration(0.1), self.publish_state)
         rospy.Timer(rospy.Duration(0.1), self.publish_features)
 
@@ -156,17 +158,42 @@ class DifferentialDrive:
     def publish_features(self, event):
         ''' Publishes the poses and uncertainties of markers detected '''
         
-        if self.nf != 0:
+        if self.nf > 0:
             features = np.split(self.xk[self.xBpose_dim:],self.nf)   # split features from state
-            pose_array = PoseArray()
-            pose_array.header.stamp = rospy.Time.now()
-            pose_array.header.frame_id = "world_ned"
-            for feat in features:
-                pose = Pose()
-                pose.position.x = feat[0]
-                pose.position.y = feat[1]
-                pose_array.poses.append(pose)
-                self.markers_pub.publish(pose_array)
+            aruco_array = ArucoWithCovarianceArray()
+            aruco_array.header.stamp = rospy.Time.now()
+            aruco_array.header.frame_id = "world_ned"
+            for i in range(len(features)):
+                feat = features[i]
+                feat_id = self.feature_ids[i]
+                pose_msg = PoseWithCovariance()
+                pose_msg.pose.position.x = feat[0]
+                pose_msg.pose.position.y = feat[1]
+                Pxx = self.P[self.xBpose_dim+(2*i),self.xBpose_dim+(2*i)]
+                Pyy = self.P[self.xBpose_dim+(2*i+1),self.xBpose_dim+(2*i+1)]
+                cov = [
+                    Pxx, 0,   0, 0, 0, 0,
+                    0,   Pyy, 0, 0, 0, 0,
+                    0,   0,   0, 0, 0, 0,
+                    0,   0,   0, 0, 0, 0,
+                    0,   0,   0, 0, 0, 0,
+                    0,   0,   0, 0, 0, 0
+                ]
+                pose_msg.covariance = cov
+                pose_topic_name = f'/turtlebot/kobuki/SLAM/markers/pose_cov_{feat_id}'
+                if feat_id not in self.pose_publishers:
+                    self.pose_publishers[feat_id] = rospy.Publisher(pose_topic_name, PoseWithCovariance, queue_size=1)
+                self.pose_publishers[feat_id].publish(pose_msg)
+                # print('Publisher>>> publishers:',self.pose_publishers, self.pose_publishers[feat_id])
+
+                marker = ArucoWithCovariance()
+                marker.id = feat_id
+                marker.pose = pose_msg
+                
+                
+                # print('Publisher >>>id:',feat_id,'Pxx:',Pxx,'Pyy:',Pyy)
+                aruco_array.markers.append(marker)
+                self.markers_pub.publish(aruco_array)
 
     
     def joint_state_callback(self, msg):
@@ -280,7 +307,7 @@ class DifferentialDrive:
         yaw = wrap_angle(yaw -np.pi/2) # to align with odom frame
         # self.yaw_Rm = cov[-1]    # alternatively: from 3x3 mat (roll,pitch,yaw) -> element at [2,2]
         self.c += 1
-        if self.c % 10 == 0:
+        if self.c % 1000 == 0:
             # self.eta_k, self.Pk = self.Update_imu(yaw, self.yaw_Rm, self.eta_k.copy(), self.Pk.copy(), self.Hm, self.Vm)
             # xk_bar = np.array([self.x, self.y, self.th]).reshape(3,1)
             # print('imu_callback>>> xk_bar:',xk_bar)
@@ -304,7 +331,7 @@ class DifferentialDrive:
         self.Update(zp, Rp, self.xk, self.P, Hp, Vp, 'features')
         self.xk, self.P = self.AddNewFeatures(self.xk, self.P, znp, Rnp, ids_np)
 
-        print('xk:',self.xk,'\nfeatures:',self.nf,'\nfeature_ids:',self.feature_ids)
+        print('xk:',self.xk, '\nP:',self.P[3:,3:], '\nfeatures:',self.nf,'\nfeature_ids:',self.feature_ids)
     
     def DataAssociation(self, xk_bar, Pk_bar, ids, zf, Rf):
         ''' Performs the Hypothesis for feature pairing '''
