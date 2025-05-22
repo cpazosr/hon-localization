@@ -61,6 +61,9 @@
         <node name="aruco_detector" pkg="localization" type="aruco_detector.py" output="screen">
         </node>
 
+        <!-- <node name="slam_plotter" pkg="localization" type="plotter.py" output="screen">
+        </node> -->
+
         <node name="world_ned_to_odom" pkg="tf2_ros" type="static_transform_publisher" args="0 0 0 0 0 0 world_ned odom"/>
  
         <!-- RVIZ -->

@@ -32,6 +32,7 @@ class Aruco_detector:
         self.image_sub = rospy.Subscriber("/turtlebot/kobuki/realsense/color/image_color", Image, self.img_callback) # input
         # Physical robot sub:
         # self.image_sub = rospy.Subscriber("/turtlebot/kobuki/realsense/color/image_raw", Image, self.img_callback) # input
+        
         self.img_aruco_pub = rospy.Publisher("/turtlebot/kobuki/sensors/aruco/image", Image, queue_size=10)     # feedback processing
         self.markers_pub = rospy.Publisher("/turtlebot/kobuki/sensors/aruco/markers", MarkerArray, queue_size=10)  # aruco poses w.r.t. robot
         self.aruco_dict = aruco.Dictionary_get(aruco.DICT_ARUCO_ORIGINAL)
@@ -74,7 +75,7 @@ class Aruco_detector:
             for i in range(len(ids)):
                 marker = Marker()
                 marker.header.stamp = rospy.Time.now()
-                marker.header.frame_id = "camera_color_optical_frame"
+                marker.header.frame_id = "camera_color_optical_frame" # simulation: "camera_color_optical_frame"
                 marker.id = ids[i][0]
                 marker.type = Marker.SPHERE
                 marker.color.a = 1.0

@@ -7,27 +7,40 @@ matplotlib.use('TkAgg')
 import matplotlib.pyplot as plt
 from nav_msgs.msg import Odometry
 from localization.msg import ArucoWithCovarianceArray
+from geometry_msgs.msg import PoseStamped
 from matplotlib.patches import Ellipse
 import message_filters
 import threading
+import tf2_ros
+import tf2_geometry_msgs
+from tf.transformations import euler_from_quaternion, quaternion_from_euler
 
 class SLAMPlotter:
     def __init__(self):
         rospy.init_node("slam_plotter")
-        self.odom_sub = message_filters.Subscriber("/turtlebot/kobuki/SLAM/EKF_odom", Odometry)
+        self.odom_sub = message_filters.Subscriber("/turtlebot/kobuki/SLAM/odom", Odometry)
         self.markers_sub = message_filters.Subscriber("/turtlebot/kobuki/SLAM/markers", ArucoWithCovarianceArray)
         self.gt_sub = message_filters.Subscriber("/turtlebot/kobuki/odom_ground_truth",Odometry)
 
         # Robot
         self.lock = threading.Lock()
-        self.robot_pos   = None            # (x,y)
-        self.robot_cov   = None            # 3×3
-        self.gt_pos      = None            # (x,y)
-        self.markers     = {}              # {id : (x,y,cov2x2)}
+        self.robot_pos = None            # (x,y)
+        self.robot_cov = None            # 3×3
+        self.gt_pos = None               # (x,y)
+        self.markers = {}                # {id : (x,y,cov2x2)}
+
+        # Containers for summary plot
+        self.robot_xk = []
+        self.gt_xk = []
+
+        # Groun truth transform
+        self.tf_buffer = tf2_ros.Buffer()
+        self.tf_listener = tf2_ros.TransformListener(self.tf_buffer)
 
         # Time synchronizer
         self.ts = message_filters.ApproximateTimeSynchronizer(
             [self.odom_sub, self.markers_sub, self.gt_sub],
+            # [self.odom_sub, self.gt_sub],
             queue_size=10,
             slop=0.1
         )
@@ -40,20 +53,37 @@ class SLAMPlotter:
 
     def sync_callback(self, odom_msg, marker_msg, gt_msg):
         with self.lock:
-            # Get robot position
+            # Get robot odometry
             rx = odom_msg.pose.pose.position.x
             ry = odom_msg.pose.pose.position.y
+            rq = odom_msg.pose.pose.orientation
+            _, _, ryaw = euler_from_quaternion([rq.x, rq.y, rq.z, rq.w])
             self.robot_pos = (rx, ry)
             c = odom_msg.pose.covariance
             self.robot_cov = np.array([[c[0], c[1], c[2]],
                                        [c[6], c[7], c[8]],
                                        [c[12],c[13],c[14]]])
-            # print(f'sync_callback>>> rx:{rx},ry:{ry},cov:{self.robot_cov}')
+            self.robot_xk.append( (rx,ry,ryaw, self.robot_cov) )
+            print('sync_callback: robot odometry acquired')
 
             # Ground truth
-            gtx = gt_msg.pose.pose.position.x
-            gty = gt_msg.pose.pose.position.y
+            pose_in = PoseStamped()
+            pose_in.header = gt_msg.header
+            pose_in.pose = gt_msg.pose.pose
+
+            print(f'gt frame_id:{pose_in.header.frame_id}')
+            tf = self.tf_buffer.lookup_transform("world_ned",
+                                pose_in.header.frame_id,
+                                pose_in.header.stamp,
+                                rospy.Duration(0.1))
+            pose_out = tf2_geometry_msgs.do_transform_pose(pose_in, tf)
+            gtx = pose_out.pose.position.x
+            gty = pose_out.pose.position.y
+            gtq = pose_out.pose.orientation
+            _, _, gtyaw = euler_from_quaternion([gtq.x, gtq.y, gtq.z, gtq.w])
+            self.gt_xk.append((gtx, gty, gtyaw))
             self.gt_pos = (gtx, gty)
+            print('sync_callback: ground truth acquired')
 
             # Markers
             self.markers.clear()
@@ -62,21 +92,24 @@ class SLAMPlotter:
                 c   = m.pose.covariance
                 cov = np.array([[c[0], c[1]],[c[6], c[7]]])
                 self.markers[m.id] = (x, y, cov)
+            print('sync_callback: markers finished')
+            print('sync_callback: finished')
     
     def redraw(self, _event):
+        print('redraw')
         with self.lock:
             if self.robot_pos is None:   # nothing yet
                 return
             # Robot
-            rx, ry         = self.robot_pos
-            r_cov          = self.robot_cov[0:2,0:2]   # only x-y plotting (2D)
-            markers_dict   = self.markers.copy()
+            rx, ry = self.robot_pos
+            r_cov = self.robot_cov[0:2,0:2]   # only x-y plotting (2D)
+            markers_dict = self.markers.copy()
             # Ground truth
             gtx, gty = self.gt_pos
 
         self.ax.clear()
         self.ax.set_aspect('equal')
-        self.ax.set_title("Robot & ArUco landmarks with 1-σ ellipses")
+        self.ax.set_title(f"Robot pose and Arucos with ellipses")
         self.ax.grid(True)
 
         # Robot
@@ -84,95 +117,92 @@ class SLAMPlotter:
         self.draw_ellipse(rx, ry, r_cov, edge='blue')
 
         # Ground truth
-        self.ax.plot(gtx, gty, 'ro', label="Ground Truth")
+        self.ax.plot(gtx, gty, 'g*', label="Ground Truth")
 
         # Markers
         for mid,(mx,my,mcov) in markers_dict.items():
             self.ax.plot(mx, my, 'rx')
             self.ax.text(mx, my, str(mid), color='red', fontsize=8)
-            self.draw_ellipse(mx, my, mcov, edge='red')
+            self.draw_ellipse(mx, my, mcov, edge='red', n_sigma=3)
 
         self.ax.legend()
-        plt.draw()         # GUI work in main thread is safe
+        plt.draw()
         plt.pause(0.001)
     
     @staticmethod
-    def draw_ellipse(x, y, cov, edge='k'):
-        if cov.shape!=(2,2): return
+    def draw_ellipse(x, y, cov, edge='k', n_sigma=1):
+        if cov.shape!=(2,2): return             # only 2d plotting
         vals, vecs = np.linalg.eigh(cov)
         angle      = np.degrees(np.arctan2(vecs[1,0], vecs[0,0]))
-        w,h        = 2*np.sqrt(vals)      # 1-σ
+        w,h        = n_sigma*2*np.sqrt(vals)      # n std_dev
         e = Ellipse((x,y), w, h, angle,
                     edgecolor=edge, facecolor='none', lw=1)
         plt.gca().add_patch(e)
-
-    def run(self):
-        rospy.spin()
-
-    def odom_callback(self, msg):
-        # Extract robot
-        self.rx = msg.pose.pose.position.x
-        self.ry = msg.pose.pose.position.y
-        self.P = np.array(msg.pose.covariance).reshape(6,6)
-
-    def markers_callback(self, msg):
-        # Extract markers
-        self.markers = msg.markers
     
-    def plot(self, event):
-        ''' Plotting '''
+    def summary_plot(self):
+        # def plot_state_errors(self, unwrap_theta=True, bins=30):
+        ''' Plot summary plots comparing robot state vs ground truth over the iterations '''
+        # Robot variables - estimated pose
+        x_est  = np.array([r[0] for r in self.robot_xk])
+        y_est  = np.array([r[1] for r in self.robot_xk])
+        th_est = np.array([r[2] for r in self.robot_xk])
+        # Robot pose covariance per component
+        x_cov  = np.array([r[3][0, 0] for r in self.robot_xk])
+        y_cov  = np.array([r[3][1, 1] for r in self.robot_xk])
+        th_cov = np.array([r[3][2, 2] for r in self.robot_xk])
+        # Ground truth valus
+        x_gt, y_gt, th_gt = (np.array(g) for g in zip(*self.gt_xk))
 
-        # Robot
-        self.ax.clear()
-        self.ax.plot(self.rx, self.ry, 'bo', label='Robot')
-        self.plot_covariance_ellipse(self.rx, self.ry, self.P[0:2, 0:2], color='b')  # robot pose
-        
-        # Markers
-        # markers = np.zeros((0,0))
-        for m in self.markers:
-            mx = m.pose.pose.position.x
-            my = m.pose.pose.position.y
-            mP = m.pose.covariance.reshape(6,6)
-            mid = m.id
-            # markers = np.array(msg.markers).reshape(-1, 2)
-            self.ax.plot(mx, my, 'rx', label=f'marker: {mid}')
-            self.plot_covariance_ellipse(self.rx, self.ry, self.P[0:1, 0:1], color='b')  # robot pose
+        # if unwrap_theta:
+        th_est = np.unwrap(th_est)
+        th_gt  = np.unwrap(th_gt)
 
-            # Covariance matrix
-            # N = 3 + 2 * markers.shape[0]
-            # P = np.array(msg.covariance).reshape(N, N)
+        # Configure subplots
+        fig, axs = plt.subplots(3, 3, figsize=(10, 9))
+        self._plot(axs[0, 0], axs[0, 1], axs[0, 2], x_est,  x_gt,  x_cov,  "x")
+        self._plot(axs[1, 0], axs[1, 1], axs[1, 2], y_est,  y_gt,  y_cov,  "y")
+        self._plot(axs[2, 0], axs[2, 1], axs[2, 2], th_est, th_gt, th_cov, "θ")
 
-            # Plot uncertainty ellipses
-            
-            # for i, (lx, ly) in enumerate(markers):
-            #     idx = 3 + 2 * i
-            #     self.plot_covariance_ellipse(lx, ly, P[idx:idx+2, idx:idx+2], color='r')
+        plt.tight_layout()
+        plt.show(block=True)
 
-        self.ax.set_xlim(self.rx - 5, self.rx + 5)
-        self.ax.set_ylim(self.ry - 5, self.ry + 5)
-        self.ax.set_aspect('equal')
-        self.ax.legend()
-        plt.draw()
-        plt.pause(0.01)
+        return fig
 
-    def plot_covariance_ellipse(self, x, y, cov, n_std=1.0, color='k'):
-        if cov.shape != (2, 2):
-            return
-        vals, vecs = np.linalg.eigh(cov)
-        angle = np.arctan2(vecs[1, 0], vecs[0, 0])
-        width, height = 2 * n_std * np.sqrt(vals)
-        from matplotlib.patches import Ellipse
-        ell = Ellipse(xy=(x, y), width=width, height=height,
-                      angle=np.degrees(angle), edgecolor=color,
-                      facecolor='none', lw=2)
-        self.ax.add_patch(ell)
+    def _plot(self, ax_true, ax_err, ax_hist, est, gt, var, label, bins=30):
+        ''' Helper plotting function for summary plots '''
+        err = est - gt
+        std = np.sqrt(var)
+
+        # Ground truth vs robot poses
+        ax_true.plot(gt, label="gt", color='green')
+        ax_true.plot(est, label="robot", color='blue', alpha=0.7)
+        ax_true.set_title(label)
+        ax_true.legend(fontsize=8)
+
+        # Covariance traces
+        ax_err.plot(err, color='blue', label="error")
+        ax_err.plot( 2*std, '--', color='green', label="+2σ")
+        ax_err.plot(-2*std, '--', color='green', label="-2σ")
+        ax_err.set_title("error")
+        ax_err.legend(fontsize=8)
+
+        #   histogram
+        ax_hist.hist(err, bins=bins, color='blue', alpha=0.7, density=True)
+        ax_hist.axvline(np.mean(err), color='k', linestyle='--')
+        ax_hist.set_title("error hist")
+        ax_hist.text(0.95, 0.95,
+                    f"mean: {np.mean(err):.3f}",
+                    ha="right", va="top",
+                    transform=ax_hist.transAxes, fontsize=8)
 
 if __name__ == '__main__':
-    # try:
     plotter = SLAMPlotter()
     rate = rospy.Rate(10)
     while not rospy.is_shutdown():
-        plotter.redraw(None)
+        try:
+            plotter.redraw(None)
+        except Exception as e:
+            print(e)
         rate.sleep()
-    # except Exception as e:
-    #     print(e)
+    print('Node terminated after shutdown. Print summary plot')
+    plotter.summary_plot()
