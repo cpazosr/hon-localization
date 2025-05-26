@@ -51,6 +51,10 @@
             <remap from="wheel_velocities" to="/$(arg robot_name)/kobuki/commands/wheel_velocities"/>
         </node>
 
+        <!-- Aruco detector node -->
+        <node name="aruco_detector" pkg="localization" type="aruco_detector.py" output="screen">
+        </node>
+
         <!-- Run Simple Odometry -->
         <node name="FEKFSLAM" pkg="localization" type="FEKFSLAM.py" output="screen">
             <rosparam command="load" file="$(find turtlebot_simulation)/config/turtlebot_odom.yaml" />
@@ -58,9 +62,7 @@
             <remap from="odom" to="/$(arg robot_name)/kobuki/odom"/>
         </node>
 
-        <node name="aruco_detector" pkg="localization" type="aruco_detector.py" output="screen">
-        </node>
-
+        <!-- Plotting node -->
         <!-- <node name="slam_plotter" pkg="localization" type="plotter.py" output="screen">
         </node> -->
 

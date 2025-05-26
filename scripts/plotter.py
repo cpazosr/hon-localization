@@ -18,9 +18,18 @@ from tf.transformations import euler_from_quaternion, quaternion_from_euler
 class SLAMPlotter:
     def __init__(self):
         rospy.init_node("slam_plotter")
+        # Testing type
+        self.physical = True
+
         self.odom_sub = message_filters.Subscriber("/turtlebot/kobuki/SLAM/odom", Odometry)
         self.markers_sub = message_filters.Subscriber("/turtlebot/kobuki/SLAM/markers", ArucoWithCovarianceArray)
-        self.gt_sub = message_filters.Subscriber("/turtlebot/kobuki/odom_ground_truth",Odometry)
+        
+        if self.physical:
+            # Physical
+            self.gt_sub = message_filters.Subscriber("/turtlebot/kobuki/odom",Odometry)
+        else:
+            # Simulation
+            self.gt_sub = message_filters.Subscriber("/turtlebot/kobuki/odom_ground_truth",Odometry)
 
         # Robot
         self.lock = threading.Lock()
@@ -52,6 +61,7 @@ class SLAMPlotter:
         print('Init complete...')
 
     def sync_callback(self, odom_msg, marker_msg, gt_msg):
+        print('sync callback')
         with self.lock:
             # Get robot odometry
             rx = odom_msg.pose.pose.position.x

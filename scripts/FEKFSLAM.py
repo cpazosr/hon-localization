@@ -22,6 +22,9 @@ def wrap_angle(angle):
 class DifferentialDrive:
     def __init__(self) -> None:
         
+        # Testing type
+        self.physical = True
+
         # Robot constants
         self.wheel_radius = 0.035
         self.wheel_base_distance = 0.230
@@ -30,14 +33,16 @@ class DifferentialDrive:
         # Get params
         self.odom_frame = rospy.get_param("~odom_frame", "odom")
         self.base_frame = rospy.get_param("~base_frame", "base_footprint")
+        
+        if self.physical:
+            # Physical robot:
+            self.left_wheel_name = rospy.get_param("~wheel_left_joint_name", "turtlebot/kobuki/wheel_left_link")
+            self.right_wheel_name = rospy.get_param("~wheel_right_joint_name", "turtlebot/kobuki/wheel_right_link")
         # Simulation:
-        self.left_wheel_name = rospy.get_param("~wheel_left_joint_name", "kobuki/wheel_left_joint")
-        self.right_wheel_name = rospy.get_param("~wheel_right_joint_name", "kobuki/wheel_right_joint")
-        # Physical robot:
-        # self.left_wheel_name = rospy.get_param("~wheel_left_joint_name", "turtlebot/kobuki/wheel_left_joint")#"kobuki/wheel_left_joint")
-        # self.right_wheel_name = rospy.get_param("~wheel_right_joint_name", "turtlebot/kobuki/wheel_right_joint")#kobuki/wheel_right_joint")
-
-
+        else:
+            self.left_wheel_name = rospy.get_param("~wheel_left_joint_name", "kobuki/wheel_left_joint")
+            self.right_wheel_name = rospy.get_param("~wheel_right_joint_name", "kobuki/wheel_right_joint")
+        
         # Logging
         rospy.loginfo("Left wheel joint name: %s", self.left_wheel_name)
         rospy.loginfo("Right wheel joint name: %s", self.right_wheel_name)
@@ -45,14 +50,17 @@ class DifferentialDrive:
         rospy.loginfo("Base frame: %s", self.base_frame)
 
         # Inital state
-        # Simulation:
-        self.x = 3.0 #3.0 -0.78 -0.2
-        self.y = -0.78
-        self.th = np.pi/2.0
-        # Physical: 
-        # self.x = 0.0
-        # self.y = 0.0
-        # self.th = 0.0
+        if self.physical:
+            # Physical: 
+            self.x = 0.0
+            self.y = 0.0
+            self.th = 0.0
+        else:
+            # Simulation:
+            self.x = 3.0 #3.0 -0.78 -0.2
+            self.y = -0.78
+            self.th = np.pi/2.0
+        
         self.xk = np.array([self.x, self.y, self.th]).reshape(3,1)
         self.P = np.diag([0.1, 0.1, 0.01])
         self.feature_ids = []
@@ -91,19 +99,32 @@ class DifferentialDrive:
         self.aruco_update_freq = 10
 
         # Sensors subscribers
-        # Simulation
-        self.js_sim_sub = rospy.Subscriber("joint_states", JointState, self.joint_state_callback_sim)
-        # Physical:
-        # self.js_phys_sub = rospy.Subscriber("/turtlebot/joint_states", JointState, self.joint_state_callback_physical)
-        
+        if self.physical:
+            # Physical:
+            self.js_phys_sub = rospy.Subscriber("/turtlebot/joint_states", JointState, self.joint_state_callback_physical)
+        else:
+           # Simulation
+            self.js_sim_sub = rospy.Subscriber("joint_states", JointState, self.joint_state_callback_sim)
+     
         self.imu_sub = rospy.Subscriber("/turtlebot/kobuki/sensors/imu_data", Imu, self.imu_callback)
-        self.aruco_sub = rospy.Subscriber("/turtlebot/kobuki/sensors/aruco/markers", MarkerArray, self.markers_callback)
+        self.aruco_sub = rospy.Subscriber("/turtlebot/kobuki/SLAM/aruco/markers", MarkerArray, self.markers_callback)
         # Odom publisher
         # self.state_pub = rospy.Publisher("/turtlebot/kobuki/SLAM/EKF_odom", Odometry, queue_size=20)
         self.odom_pub = rospy.Publisher("/turtlebot/kobuki/SLAM/odom", Odometry, queue_size=20)    # /turtlebot/kobuki/odom
-        self.markers_pub = rospy.Publisher("/turtlebot/kobuki/SLAM/markers", ArucoWithCovarianceArray, queue_size=1)
+        self.markers_pub = rospy.Publisher("/turtlebot/kobuki/SLAM/features", ArucoWithCovarianceArray, queue_size=1)
         self.tf_br = TransformBroadcaster()
-        self.pose_publishers = {}
+        self.pose_publishers = {
+            1: rospy.Publisher("/turtlebot/kobuki/SLAM/markers/pose_cov_1", Odometry, queue_size=1),
+            11: rospy.Publisher("/turtlebot/kobuki/SLAM/markers/pose_cov_11", Odometry, queue_size=1),
+            21: rospy.Publisher("/turtlebot/kobuki/SLAM/markers/pose_cov_21", Odometry, queue_size=1),
+            31: rospy.Publisher("/turtlebot/kobuki/SLAM/markers/pose_cov_31", Odometry, queue_size=1),
+            41: rospy.Publisher("/turtlebot/kobuki/SLAM/markers/pose_cov_41", Odometry, queue_size=1),
+            51: rospy.Publisher("/turtlebot/kobuki/SLAM/markers/pose_cov_51", Odometry, queue_size=1),
+            61: rospy.Publisher("/turtlebot/kobuki/SLAM/markers/pose_cov_61", Odometry, queue_size=1),
+            71: rospy.Publisher("/turtlebot/kobuki/SLAM/markers/pose_cov_71", Odometry, queue_size=1),
+            81: rospy.Publisher("/turtlebot/kobuki/SLAM/markers/pose_cov_81", Odometry, queue_size=1),
+            91: rospy.Publisher("/turtlebot/kobuki/SLAM/markers/pose_cov_91", Odometry, queue_size=1)
+        }
         # rospy.Timer(rospy.Duration(0.1), self.publish_state)
         rospy.Timer(rospy.Duration(0.1), self.publish_features)
 
@@ -178,7 +199,7 @@ class DifferentialDrive:
             features = np.split(self.xk[self.xBpose_dim:],self.nf)   # split features from state
             aruco_array = ArucoWithCovarianceArray()
             aruco_array.header.stamp = rospy.Time.now()
-            aruco_array.header.frame_id = "world_ned"
+            aruco_array.header.frame_id = "odom"
             for i in range(len(features)):
                 feat = features[i]
                 feat_id = self.feature_ids[i]
@@ -196,10 +217,20 @@ class DifferentialDrive:
                     0,   0,   0, 0, 0, 0
                 ]
                 pose_msg.covariance = cov
-                pose_topic_name = f'/turtlebot/kobuki/SLAM/markers/pose_cov_{feat_id}'
-                if feat_id not in self.pose_publishers:
-                    self.pose_publishers[feat_id] = rospy.Publisher(pose_topic_name, PoseWithCovariance, queue_size=1)
-                self.pose_publishers[feat_id].publish(pose_msg)
+                # pose_topic_name = f'/turtlebot/kobuki/SLAM/markers/pose_cov_{feat_id}'
+                
+                # if feat_id not in self.pose_publishers:
+                    # print('publishing feature')
+                    # self.pose_publishers[feat_id] = rospy.Publisher(pose_topic_name, PoseWithCovariance, queue_size=1)
+                
+                marker_odom_msg = Odometry()
+                marker_odom_msg.header.stamp = rospy.Time.now()
+                marker_odom_msg.header.frame_id = "odom"
+                marker_odom_msg.pose.pose.position.x = feat[0]
+                marker_odom_msg.pose.pose.position.y = feat[1]
+                marker_odom_msg.pose.covariance = cov
+                
+                self.pose_publishers[feat_id].publish(marker_odom_msg)
                 # print('Publisher>>> publishers:',self.pose_publishers, self.pose_publishers[feat_id])
 
                 marker = ArucoWithCovariance()
@@ -430,7 +461,7 @@ class DifferentialDrive:
             zp, Rp, Hp, Vp, znp, Rnp, ids_p, ids_np = self.SplitFeatures(zf, self.xy_Rk, self.H, ids)
             self.Update(zp, Rp, self.xk, self.P, Hp, Vp, 'features')
             self.xk, self.P = self.AddNewFeatures(self.xk, self.P, znp, Rnp, ids_np)
-        print(self.aruco_c)
+        # print(self.aruco_c)
         
 
         print('xk:',self.xk, '\nfeatures:',self.nf,'\nfeature_ids:',self.feature_ids)

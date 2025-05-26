@@ -6,7 +6,7 @@ from cv2 import aruco
 import rospy
 from cv_bridge import CvBridge, CvBridgeError
 from tf.transformations import quaternion_from_matrix
-from sensor_msgs.msg import Image, CameraInfo
+from sensor_msgs.msg import Image, CameraInfo, CompressedImage
 from geometry_msgs.msg import Pose
 from visualization_msgs.msg import Marker, MarkerArray
 
@@ -27,17 +27,16 @@ aruco img: turtlebot_simulation/resources/textures
 
 class Aruco_detector:
     def __init__(self):
+        # Type of testing
+        self.physical = True
+        # Image configurations and detector params
         self.bridge = CvBridge()
-        # Simulation sub:
-        self.image_sub = rospy.Subscriber("/turtlebot/kobuki/realsense/color/image_color", Image, self.img_callback) # input
-        # Physical robot sub:
-        # self.image_sub = rospy.Subscriber("/turtlebot/kobuki/realsense/color/image_raw", Image, self.img_callback) # input
-        
-        self.img_aruco_pub = rospy.Publisher("/turtlebot/kobuki/sensors/aruco/image", Image, queue_size=10)     # feedback processing
-        self.markers_pub = rospy.Publisher("/turtlebot/kobuki/sensors/aruco/markers", MarkerArray, queue_size=10)  # aruco poses w.r.t. robot
         self.aruco_dict = aruco.Dictionary_get(aruco.DICT_ARUCO_ORIGINAL)
         self.parameters = aruco.DetectorParameters_create()
-        self.marker_size = 0.18
+        if self.physical:
+            self.marker_size = 0.193
+        else:
+            self.marker_size = 0.18
         cam_info_msg = rospy.wait_for_message("/turtlebot/kobuki/realsense/color/camera_info", CameraInfo)
         self.camera_matrix = np.array(cam_info_msg.K).reshape(3,3)
         self.dist_coeffs = np.array(cam_info_msg.D)
@@ -45,17 +44,42 @@ class Aruco_detector:
         #                                 [0, 800, 240],
         #                                 [0, 0, 1]])
         # self.dist_coeffs = np.array([0, 0, 0, 0, 0])
+
+        if self.physical:
+            # Physical robot sub:
+            self.image_sub = rospy.Subscriber("/turtlebot/kobuki/realsense/color/image_raw/compressed", CompressedImage, self.img_callback) # input
+        else:
+            # Simulation sub:
+            self.image_sub = rospy.Subscriber("/turtlebot/kobuki/realsense/color/image_color", Image, self.img_callback) # input
+        
+        self.img_aruco_pub = rospy.Publisher("/turtlebot/kobuki/SLAM/aruco/image", Image, queue_size=10)     # feedback processing
+        self.markers_pub = rospy.Publisher("/turtlebot/kobuki/SLAM/aruco/markers", MarkerArray, queue_size=10)  # aruco poses w.r.t. robot
+
         rospy.loginfo("Aruco detector node started")
         
 
-    def img_callback(self, data):
-        try:
-            # rospy.loginfo("img_callback")
-            cv_image = self.bridge.imgmsg_to_cv2(data, "bgr8")
-            # rospy.loginfo("Received image")
-        except CvBridgeError as e:
-            rospy.logerr(e)
-            return
+    def img_callback(self, msg):
+        if self.physical:
+            try:
+                np_data = np.frombuffer(msg.data, np.uint8)
+                img_np = cv2.imdecode(np_data, cv2.IMREAD_COLOR)
+                # debug conversion
+                # img_msg = self.bridge.cv2_to_imgmsg(img_np, encoding='bgr8')
+                # img_msg.header.stamp = msg.header.stamp
+                # img_msg.header.frame_id = "camera_color_optical_frame"
+                # self.img_aruco_pub.publish(img_msg)
+                cv_image = img_np
+                # rospy.loginfo("Received image")
+            except CvBridgeError as e:
+                rospy.logerr(e)
+                return
+        else:
+            try:
+                cv_image = self.bridge.imgmsg_to_cv2(msg, "bgr8")
+                rospy.loginfo("Received image")
+            except CvBridgeError as e:
+                rospy.logerr(e)
+                return
 
         # Detect corners
         gray = cv2.cvtColor(cv_image, cv2.COLOR_BGR2GRAY)
@@ -75,7 +99,10 @@ class Aruco_detector:
             for i in range(len(ids)):
                 marker = Marker()
                 marker.header.stamp = rospy.Time.now()
-                marker.header.frame_id = "camera_color_optical_frame" # simulation: "camera_color_optical_frame"
+                if self.physical:
+                    marker.header.frame_id = "realsense_color_optical_frame"
+                else:
+                    marker.header.frame_id = "camera_color_optical_frame"
                 marker.id = ids[i][0]
                 marker.type = Marker.SPHERE
                 marker.color.a = 1.0
