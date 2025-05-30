@@ -28,11 +28,11 @@ class DifferentialDrive:
         # Robot constants
         self.wheel_radius = 0.035
         self.wheel_base_distance = 0.230
-        self.wheel_vel_noise = 3*np.array([0.01, 0.01])
+        self.wheel_vel_noise = 5*np.array([0.01, 0.01])
 
         # Get params
         self.odom_frame = rospy.get_param("~odom_frame", "odom")
-        self.base_frame = rospy.get_param("~base_frame", "base_footprint")
+        self.base_frame = rospy.get_param("~base_frame", "turtlebot/kobuki/base_footprint")#"base_footprint")
         
         if self.physical:
             # Physical robot:
@@ -62,7 +62,7 @@ class DifferentialDrive:
             self.th = np.pi/2.0
         
         self.xk = np.array([self.x, self.y, self.th]).reshape(3,1)
-        self.P = np.diag([0.1, 0.1, 0.01])
+        self.P = 0.1*np.diag([0.1, 0.1, 0.01])
         self.feature_ids = []
         
         # EKF state
@@ -94,7 +94,7 @@ class DifferentialDrive:
         self.imu_c = 0
         self.imu_update_freq = 10
         # Aruco Markers
-        self.xy_Rk = 1*np.diag(np.array([1**2, 1**2])) # covariance of reading a coordinate feature
+        self.xy_Rk = 0.5*np.diag(np.array([1**2, 1**2])) # covariance of reading a coordinate feature
         self.aruco_c = 0
         self.aruco_update_freq = 10
 

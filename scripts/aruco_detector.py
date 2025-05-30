@@ -76,7 +76,7 @@ class Aruco_detector:
         else:
             try:
                 cv_image = self.bridge.imgmsg_to_cv2(msg, "bgr8")
-                rospy.loginfo("Received image")
+                # rospy.loginfo("Received image")
             except CvBridgeError as e:
                 rospy.logerr(e)
                 return
@@ -98,7 +98,7 @@ class Aruco_detector:
 
             for i in range(len(ids)):
                 marker = Marker()
-                marker.header.stamp = rospy.Time.now()
+                # marker.header.stamp = rospy.Time.now()
                 if self.physical:
                     marker.header.frame_id = "realsense_color_optical_frame"
                 else:
@@ -131,6 +131,7 @@ class Aruco_detector:
 
                 markers_array.markers.append(marker)
             self.markers_pub.publish(markers_array)
+            # print('markers published')
         
         # Publish detector
         out = self.bridge.cv2_to_imgmsg(cv_image, encoding='bgr8')

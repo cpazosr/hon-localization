@@ -9,7 +9,6 @@ from nav_msgs.msg import Odometry
 from localization.msg import ArucoWithCovarianceArray
 from geometry_msgs.msg import PoseStamped
 from matplotlib.patches import Ellipse
-import message_filters
 import threading
 import tf2_ros
 import tf2_geometry_msgs
@@ -19,17 +18,18 @@ class SLAMPlotter:
     def __init__(self):
         rospy.init_node("slam_plotter")
         # Testing type
-        self.physical = False
+        self.physical = True
 
-        self.odom_sub = message_filters.Subscriber("/turtlebot/kobuki/SLAM/odom", Odometry)
-        self.markers_sub = message_filters.Subscriber("/turtlebot/kobuki/SLAM/markers", ArucoWithCovarianceArray)
+        self.odom_sub = rospy.Subscriber("/turtlebot/kobuki/SLAM/odom", Odometry, self.odom_callback)
+        self.markers_sub = rospy.Subscriber("/turtlebot/kobuki/SLAM/features", ArucoWithCovarianceArray, self.arucos_callback)
         
         if self.physical:
             # Physical
-            self.gt_sub = message_filters.Subscriber("/turtlebot/kobuki/odom",Odometry)
+            self.gt_sub = rospy.Subscriber("/turtlebot/kobuki/odom",Odometry, self.gt_callback)
+            # self.lidar_slam_sub = rospy.Subscriber("/slam_out_pose",PoseStamped, self.lidar_slam_callback)
         else:
             # Simulation
-            self.gt_sub = message_filters.Subscriber("/turtlebot/kobuki/odom_ground_truth",Odometry)
+            self.gt_sub = rospy.Subscriber("/turtlebot/kobuki/odom_ground_truth",Odometry,self.gt_callback)
 
         # Robot
         self.lock = threading.Lock()
@@ -46,43 +46,39 @@ class SLAMPlotter:
         self.tf_buffer = tf2_ros.Buffer()
         self.tf_listener = tf2_ros.TransformListener(self.tf_buffer)
 
-        # Time synchronizer
-        self.ts = message_filters.ApproximateTimeSynchronizer(
-            [self.odom_sub, self.markers_sub, self.gt_sub],
-            # [self.odom_sub, self.gt_sub],
-            queue_size=10,
-            slop=0.1
-        )
-        self.ts.registerCallback(self.sync_callback)
-
         # Initialize matplotlib
         self.fig, self.ax = plt.subplots()
         plt.ion()
         print('Init complete...')
 
-    def sync_callback(self, odom_msg, marker_msg, gt_msg):
-        print('sync callback')
-        with self.lock:
-            # Get robot odometry
-            rx = odom_msg.pose.pose.position.x
-            ry = odom_msg.pose.pose.position.y
-            rq = odom_msg.pose.pose.orientation
-            _, _, ryaw = euler_from_quaternion([rq.x, rq.y, rq.z, rq.w])
-            self.robot_pos = (rx, ry)
-            c = odom_msg.pose.covariance
-            self.robot_cov = np.array([[c[0], c[1], c[5]],
+    def odom_callback(self, msg):
+        # SLAM odometry
+        rx = msg.pose.pose.position.x
+        ry = msg.pose.pose.position.y
+        rq = msg.pose.pose.orientation
+        _, _, ryaw = euler_from_quaternion([rq.x, rq.y, rq.z, rq.w])
+        self.robot_pos = (rx, ry)
+        c = msg.pose.covariance
+        self.robot_cov = np.array([[c[0], c[1], c[5]],
                                     [c[6], c[7], c[11]],
                                     [c[30],c[31],c[35]]])
-            self.robot_xk.append( (rx,ry,ryaw, self.robot_cov) )
-            print('sync_callback: robot odometry acquired')
-
-            # Ground truth
+        self.robot_xk.append( (rx,ry,ryaw, self.robot_cov) )
+    
+    def gt_callback(self, msg):
+        # Ground truth
+        if self.physical:
+            gtx = msg.pose.pose.position.x
+            gty = -msg.pose.pose.position.y     # negative for visualization
+            gtq = msg.pose.pose.orientation
+            _, _, gtyaw = euler_from_quaternion([gtq.x, gtq.y, gtq.z, gtq.w])
+            self.gt_xk.append((gtx, gty, -gtyaw))
+            self.gt_pos = (gtx, gty) 
+        else:
             pose_in = PoseStamped()
-            pose_in.header = gt_msg.header
-            pose_in.pose = gt_msg.pose.pose
+            pose_in.header = msg.header
+            pose_in.pose = msg.pose.pose
 
-            print(f'gt frame_id:{pose_in.header.frame_id}')
-            tf = self.tf_buffer.lookup_transform("world_ned",
+            tf = self.tf_buffer.lookup_transform("odom",
                                 pose_in.header.frame_id,
                                 pose_in.header.stamp,
                                 rospy.Duration(0.1))
@@ -92,30 +88,43 @@ class SLAMPlotter:
             gtq = pose_out.pose.orientation
             _, _, gtyaw = euler_from_quaternion([gtq.x, gtq.y, gtq.z, gtq.w])
             self.gt_xk.append((gtx, gty, gtyaw))
-            self.gt_pos = (gtx, gty)
-            print('sync_callback: ground truth acquired')
+            self.gt_pose = (gtx, gty)
+            
+    def lidar_slam_callback(self, msg):
+        tf = self.tf_buffer.lookup_transform("odom", #"world_ned",
+                            msg.header.frame_id,
+                            msg.header.stamp,
+                            rospy.Duration(0.1))
+        pose_out = tf2_geometry_msgs.do_transform_pose(msg, tf)
+        gtx = pose_out.pose.position.x
+        gty = pose_out.pose.position.y
+        gtq = pose_out.pose.orientation
+        _, _, gtyaw = euler_from_quaternion([gtq.x, gtq.y, gtq.z, gtq.w])
+        self.gt_xk.append((gtx, gty, gtyaw))
+        self.gt_pos = (gtx, gty)
 
-            # Markers
-            self.markers.clear()
-            for m in marker_msg.markers:
-                x,y = m.pose.pose.position.x, m.pose.pose.position.y
-                c   = m.pose.covariance
-                cov = np.array([[c[0], c[1]],[c[6], c[7]]])
-                self.markers[m.id] = (x, y, cov)
-            print('sync_callback: markers finished')
-            print('sync_callback: finished')
+    def arucos_callback(self, msg):
+        # Markers
+        self.markers.clear()
+        for m in msg.markers:
+            x,y = m.pose.pose.position.x, m.pose.pose.position.y
+            c   = m.pose.covariance
+            cov = np.array([[c[0], c[1]],[c[6], c[7]]])
+            self.markers[m.id] = (x, y, cov)
+    
     
     def redraw(self, _event):
-        print('redraw')
         with self.lock:
             if self.robot_pos is None:   # nothing yet
                 return
             # Robot
             rx, ry = self.robot_pos
             r_cov = self.robot_cov[0:2,0:2]   # only x-y plotting (2D)
+            # Markers
             markers_dict = self.markers.copy()
             # Ground truth
             gtx, gty = self.gt_pos
+            print('data updated')
 
         self.ax.clear()
         self.ax.set_aspect('equal')
@@ -169,9 +178,10 @@ class SLAMPlotter:
 
         # Configure subplots
         fig, axs = plt.subplots(3, 3, figsize=(10, 9))
-        self._plot(axs[0, 0], axs[0, 1], axs[0, 2], x_est,  x_gt,  x_cov,  "x")
-        self._plot(axs[1, 0], axs[1, 1], axs[1, 2], y_est,  y_gt,  y_cov,  "y")
-        self._plot(axs[2, 0], axs[2, 1], axs[2, 2], th_est, th_gt, th_cov, "θ")
+        idx = np.min([len(x_est), len(x_gt)])
+        self._plot(axs[0, 0], axs[0, 1], axs[0, 2], x_est[:idx],  x_gt[:idx],  x_cov[:idx],  "x")
+        self._plot(axs[1, 0], axs[1, 1], axs[1, 2], y_est[:idx],  y_gt[:idx],  y_cov[:idx],  "y")
+        self._plot(axs[2, 0], axs[2, 1], axs[2, 2], th_est[:idx], th_gt[:idx], th_cov[:idx], "θ")
 
         plt.tight_layout()
         plt.show(block=True)
