@@ -18,7 +18,7 @@ class SLAMPlotter:
     def __init__(self):
         rospy.init_node("slam_plotter")
         # Testing type
-        self.physical = True
+        self.physical = False
 
         self.odom_sub = rospy.Subscriber("/turtlebot/kobuki/SLAM/odom", Odometry, self.odom_callback)
         self.markers_sub = rospy.Subscriber("/turtlebot/kobuki/SLAM/features", ArucoWithCovarianceArray, self.arucos_callback)
@@ -88,7 +88,7 @@ class SLAMPlotter:
             gtq = pose_out.pose.orientation
             _, _, gtyaw = euler_from_quaternion([gtq.x, gtq.y, gtq.z, gtq.w])
             self.gt_xk.append((gtx, gty, gtyaw))
-            self.gt_pose = (gtx, gty)
+            self.gt_pos = (gtx, gty)
             
     def lidar_slam_callback(self, msg):
         tf = self.tf_buffer.lookup_transform("odom", #"world_ned",

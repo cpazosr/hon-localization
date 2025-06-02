@@ -28,7 +28,7 @@ aruco img: turtlebot_simulation/resources/textures
 class Aruco_detector:
     def __init__(self):
         # Type of testing
-        self.physical = True
+        self.physical = False
         # Image configurations and detector params
         self.bridge = CvBridge()
         self.aruco_dict = aruco.Dictionary_get(aruco.DICT_ARUCO_ORIGINAL)
